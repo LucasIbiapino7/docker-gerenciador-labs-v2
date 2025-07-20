@@ -3,7 +3,7 @@
 1. **Clone o repositório:**
 
    ```bash
-   git clone https://github.com/usuario/portal-labs-compose.git
+   git clone git@github.com:LucasIbiapino7/docker-gerenciador-labs-v2.git
    cd portal-labs-compose
    ```
 
@@ -23,5 +23,4 @@
 
 Acesse:
 
-* Frontend: [http://localhost:5173](http://localhost:5173)
-* Auth Server: [http://localhost:9000](http://localhost:9000)
+* Frontend: [http://localhost:5173](http://localhost)
