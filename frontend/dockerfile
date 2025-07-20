@@ -1,0 +1,35 @@
+# 1) Build stage
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+COPY package.json package-lock.json* pnpm-lock.yaml* yarn.lock* ./
+RUN npm ci
+
+COPY . .
+
+# Essas args vêm do docker-compose, via "args"
+ARG VITE_AUTH_URL
+ARG VITE_API_URL
+ARG VITE_CLIENT_ID
+ARG VITE_REDIRECT_URI
+ARG VITE_POST_LOGOUT_URI
+ARG VITE_SCOPE
+
+ENV \
+  VITE_AUTH_URL=$VITE_AUTH_URL \
+  VITE_API_URL=$VITE_API_URL \
+  VITE_CLIENT_ID=$VITE_CLIENT_ID \
+  VITE_REDIRECT_URI=$VITE_REDIRECT_URI \
+  VITE_POST_LOGOUT_URI=$VITE_POST_LOGOUT_URI \
+  VITE_SCOPE=$VITE_SCOPE
+
+RUN npm run build
+
+# 2) Runtime stage
+FROM nginx:1.27
+WORKDIR /usr/share/nginx/html
+
+COPY --from=builder /app/dist ./
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80

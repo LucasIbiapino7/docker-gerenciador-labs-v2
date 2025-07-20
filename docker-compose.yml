@@ -1,0 +1,201 @@
+version: '3.8'
+
+services:
+  # 1) Banco do Authorization Server
+  auth-db:
+    image: postgres:16-alpine
+    container_name: auth-db
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - auth-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      retries: 5
+
+  # 2) Banco do Resource Server
+  resource-db:
+    image: postgres:16-alpine
+    container_name: resource-db
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: gerenciador-labs
+      POSTGRES_USER: ${RS_DB_USER}
+      POSTGRES_PASSWORD: ${RS_DB_PASS}
+    volumes:
+      - resource-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${RS_DB_USER} -d gerenciador-labs"]
+      interval: 10s
+      retries: 5
+
+  # 3) Banco do Lattes Server
+  lattes-db:
+    image: postgres:16-alpine
+    container_name: lattes-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: lattes
+      POSTGRES_USER: ${LATTES_DB_USER}
+      POSTGRES_PASSWORD: ${LATTES_DB_PASS}
+    volumes:
+      - ./lattes-server/db/init:/docker-entrypoint-initdb.d
+      - lattes-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: >
+        bash -c '
+        pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" || exit 1
+        
+        if psql -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" -tAc \
+            "SELECT 1 FROM pg_stat_activity 
+             WHERE application_name = '\''docker-entrypoint.sh'\'' 
+             AND query LIKE '\''%docker-entrypoint-initdb.d%'\''" | grep -q 1; then
+          exit 1
+        fi
+        
+        psql -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" -c \
+          "CREATE TEMP TABLE healthcheck_test (id INT); DROP TABLE healthcheck_test;" || exit 1
+        exit 0'
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 40s
+
+  # 4) Authorization Server
+  authorization-server:
+    build:
+      context: ./authorization-server
+    container_name: authorization-server
+    depends_on:
+      auth-db:
+        condition: service_healthy
+      resource-db:
+        condition: service_healthy
+      lattes-db:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - ./keys:/keys:ro
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SERVER_PORT_AS: 9000
+      DB_URL: ${DB_URL}
+      DB_USER: ${DB_USER}
+      DB_PASS: ${DB_PASS}
+      CLIENT_ID: ${CLIENT_ID}
+      REDIRECT_URI: ${REDIRECT_URI}
+      REDIRECT_LOGOUT_URI: ${REDIRECT_LOGOUT_URI}
+      JWT_DURATION: ${JWT_DURATION}
+      CORS_ALLOWED_ORIGIN: ${CORS_ALLOWED_ORIGIN}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      SECURITY_JWK_LOCATION: file:/keys/jwk-private.pem
+      SPRING_SECURITY_OAUTH2_AUTHORIZATIONSERVER_ISSUER: http://authorization-server:9000
+    ports:
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/actuator/health || exit 0"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+
+  # 5) Lattes Server
+  lattes-server:
+    build:
+      context: ./lattes-server
+    container_name: lattes-server
+    depends_on:
+      lattes-db:
+        condition: service_healthy
+      auth-db:
+        condition: service_healthy
+      resource-db:
+        condition: service_healthy
+    env_file:
+    - .env
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      LATTES_SERVER_PORT: ${LATTES_SERVER_PORT:-8000}  
+      LATTES_DB_URL: ${LATTES_DB_URL}   
+      LATTES_DB_USER: ${LATTES_DB_USER}
+      LATTES_DB_PASS: ${LATTES_DB_PASS}
+    ports:
+      - "${LATTES_SERVER_PORT:-8000}:${LATTES_SERVER_PORT:-8000}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:${LATTES_SERVER_PORT:-8000}/actuator/health || exit 0"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # 6) Resource Server
+  resource-server:
+    build:
+      context: ./resource-server
+    container_name: resource-server
+    depends_on:
+      resource-db:
+        condition: service_healthy
+      lattes-server:
+        condition: service_healthy
+      auth-db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SERVER_PORT: 8080
+      DB_URL: ${RS_DB_URL}
+      DB_USER: ${RS_DB_USER}
+      DB_PASS: ${RS_DB_PASS}
+      LATTES_BASE_URL: ${LATTES_BASE_URL}
+      FILE_UPLOAD_DIR: ${FILE_UPLOAD_DIR}
+      ISSUER_URI: ${ISSUER_URI}
+      CORS_ALLOWED_ORIGIN: ${CORS_ALLOWED_ORIGIN}
+    ports:
+      - "8080:8080"
+    volumes:
+      - resource-uploads:${FILE_UPLOAD_DIR}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 0"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 90s
+
+  # 7) Frontend (NGINX SPA)
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_AUTH_URL: ${VITE_AUTH_URL}
+        VITE_API_URL: ${VITE_API_URL}
+        VITE_CLIENT_ID: ${VITE_CLIENT_ID}
+        VITE_REDIRECT_URI: ${VITE_REDIRECT_URI}
+        VITE_POST_LOGOUT_URI: ${VITE_POST_LOGOUT_URI}
+        VITE_SCOPE: ${VITE_SCOPE}
+    container_name: frontend
+    depends_on:
+      resource-server:
+        condition: service_healthy
+      lattes-server:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    restart: unless-stopped
+
+volumes:
+  auth-db-data:
+  resource-db-data:
+  lattes-db-data:
+  resource-uploads:
