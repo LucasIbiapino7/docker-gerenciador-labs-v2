@@ -4,7 +4,7 @@
 
    ```bash
    git clone git@github.com:LucasIbiapino7/docker-gerenciador-labs-v2.git
-   cd portal-labs-compose
+   cd docker-gerenciador-labs-v2
    ```
 
 2. **Crie o arquivo `.env`:**
@@ -23,4 +23,4 @@
 
 Acesse:
 
-* Frontend: [http://localhost:5173](http://localhost)
+* Frontend: [http://localhost](http://localhost)
